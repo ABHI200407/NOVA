@@ -10,7 +10,9 @@ const AGENTS = {
   Coder: { color: "bg-blue-500", shadow: "shadow-[0_0_20px_rgba(59,130,246,0.6)]", label: "Writer" },
   Researcher: { color: "bg-yellow-500", shadow: "shadow-[0_0_20px_rgba(234,179,8,0.6)]", label: "Reviewer" },
   Executor: { color: "bg-zinc-400", shadow: "shadow-[0_0_20px_rgba(161,161,170,0.6)]", label: "DevOps" },
-  Supervisor: { color: "bg-white", shadow: "shadow-[0_0_20px_rgba(255,255,255,0.8)]", label: "Nova Core" }
+  Supervisor: { color: "bg-white", shadow: "shadow-[0_0_20px_rgba(255,255,255,0.8)]", label: "Nova Core" },
+  Security: { color: "bg-orange-500", shadow: "shadow-[0_0_20px_rgba(249,115,22,0.6)]", label: "Security" },
+  Performance: { color: "bg-cyan-500", shadow: "shadow-[0_0_20px_rgba(6,182,212,0.6)]", label: "Performance" }
 };
 
 export default function NovaIDE() {
@@ -143,6 +145,8 @@ export default function NovaIDE() {
                 <AgentBubble id="Coder" x={150} y={150} />
                 <AgentBubble id="Researcher" x={750} y={200} />
                 <AgentBubble id="Executor" x={100} y={400} />
+                <AgentBubble id="Security" x={300} y={50} />
+                <AgentBubble id="Performance" x={850} y={400} />
             </div>
         </div>
 

@@ -36,6 +36,8 @@ class NovaMultiAgent:
         workflow.add_node("Coder", self.coder_node)
         workflow.add_node("Researcher", self.researcher_node)
         workflow.add_node("Executor", self.executor_node)
+        workflow.add_node("Security", self.security_node)
+        workflow.add_node("Performance", self.performance_node)
         
         # Define edges
         workflow.add_conditional_edges(
@@ -45,6 +47,8 @@ class NovaMultiAgent:
                 "Coder": "Coder",
                 "Researcher": "Researcher",
                 "Executor": "Executor",
+                "Security": "Security",
+                "Performance": "Performance",
                 "FINISH": END
             }
         )
@@ -52,15 +56,17 @@ class NovaMultiAgent:
         workflow.add_edge("Coder", "Supervisor")
         workflow.add_edge("Researcher", "Supervisor")
         workflow.add_edge("Executor", "Supervisor")
+        workflow.add_edge("Security", "Supervisor")
+        workflow.add_edge("Performance", "Supervisor")
         
         workflow.set_entry_point("Supervisor")
         self.graph = workflow.compile()
 
-        self.members = ["Coder", "Researcher", "Executor"]
+        self.members = ["Coder", "Researcher", "Executor", "Security", "Performance"]
         
     async def supervisor_node(self, state: AgentState):
         system_prompt = (
-            "You are Nova Supervisor, coordinating the following workers: Coder, Researcher, Executor. "
+            "You are Nova Supervisor, coordinating the following workers: Coder, Researcher, Executor, Security, Performance. "
             "Given the user request and the conversation history, decide who should act next. "
             "If the task is fully completed, respond with FINISH. "
             "Output only the name of the next worker or FINISH."
@@ -134,6 +140,22 @@ class NovaMultiAgent:
             "You are the Executor. You run terminal commands in a secure sandbox.",
             docker_tools,
             {"run_command_in_sandbox": run_command_in_sandbox}
+        )
+
+    async def security_node(self, state: AgentState):
+        return self._execute_agent(
+            state, "Security",
+            "You are the Security Agent. Your mission is to scan code for vulnerabilities, exposed secrets, and insecure patterns.",
+            [], # Security specific tools can be added later (e.g. bandit, semgrep)
+            {}
+        )
+
+    async def performance_node(self, state: AgentState):
+        return self._execute_agent(
+            state, "Performance",
+            "You are the Performance Agent. Your mission is to analyze code for bottlenecks, memory leaks, and optimization opportunities.",
+            [], # Performance specific tools can be added later
+            {}
         )
 
     async def run_step(self, user_input: str, websocket_manager, websocket):
