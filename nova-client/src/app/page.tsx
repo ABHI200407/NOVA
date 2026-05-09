@@ -10,17 +10,17 @@ const AGENTS = {
   Coder: { color: "bg-blue-500", shadow: "shadow-[0_0_20px_rgba(59,130,246,0.6)]", label: "Writer" },
   Researcher: { color: "bg-yellow-500", shadow: "shadow-[0_0_20px_rgba(234,179,8,0.6)]", label: "Reviewer" },
   Executor: { color: "bg-zinc-400", shadow: "shadow-[0_0_20px_rgba(161,161,170,0.6)]", label: "DevOps" },
-  Supervisor: { color: "bg-white", shadow: "shadow-[0_0_20px_rgba(255,255,255,0.8)]", label: "Gravity Core" }
+  Supervisor: { color: "bg-white", shadow: "shadow-[0_0_20px_rgba(255,255,255,0.8)]", label: "Nova Core" }
 };
 
-export default function AntiGravityIDE() {
+export default function NovaIDE() {
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
   const [ws, setWs] = useState<WebSocket | null>(null);
   const [activeAgent, setActiveAgent] = useState<string | null>(null);
   
   // Editor state
-  const [code, setCode] = useState('// Welcome to the Anti-Gravity IDE\n// Agents are standing by.\n\nfunction init() {\n  console.log("Gravity Core online.");\n}\n');
+  const [code, setCode] = useState('// Welcome to the Nova IDE\\n// Agents are standing by.\\n\\nfunction init() {\\n  console.log("Nova Core online.");\\n}\\n');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -104,7 +104,7 @@ export default function AntiGravityIDE() {
             <div className="w-6 h-6 rounded bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center">
                 <Zap className="w-3 h-3 text-white" fill="currentColor" />
             </div>
-            <h1 className="font-bold text-sm tracking-wide text-zinc-100">ANTI-GRAVITY</h1>
+            <h1 className="font-bold text-sm tracking-wide text-zinc-100">NOVA</h1>
           </div>
         </div>
 
@@ -119,13 +119,13 @@ export default function AntiGravityIDE() {
             </div>
             <div className="flex items-center space-x-2 px-2 py-1.5 bg-blue-500/10 rounded-md cursor-pointer text-sm text-blue-400 ml-4">
               <FileCode2 className="w-4 h-4 text-blue-400" />
-              <span>gravity_core.js</span>
+              <span>nova_core.js</span>
             </div>
           </div>
         </div>
 
         <div className="p-4 border-t border-zinc-800">
-             <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Gravity Core Status</div>
+             <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Nova Core Status</div>
              <div className="flex items-center space-x-2">
                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
                  <span className="text-xs text-zinc-300">Synchronized</span>
@@ -149,7 +149,7 @@ export default function AntiGravityIDE() {
         {/* Top Header */}
         <header className="h-10 border-b border-zinc-800 flex items-center px-4 bg-[#121214] z-10">
             <div className="flex space-x-4">
-                <span className="text-xs text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors">gravity_core.js</span>
+                <span className="text-xs text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors">nova_core.js</span>
             </div>
         </header>
 
@@ -176,7 +176,7 @@ export default function AntiGravityIDE() {
         {/* Bottom Panel: Chat and Terminal Feed */}
         <div className="h-72 border-t border-zinc-800 bg-[#121214] flex flex-col z-30 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
             <div className="h-8 border-b border-zinc-800 flex items-center px-4 space-x-6 text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
-                <span className="text-blue-400 border-b border-blue-400 h-full flex items-center">Gravity Terminal</span>
+                <span className="text-blue-400 border-b border-blue-400 h-full flex items-center">Nova Terminal</span>
                 <span className="hover:text-zinc-300 cursor-pointer transition-colors">Agent Logs</span>
                 <span className="hover:text-zinc-300 cursor-pointer transition-colors">Problems</span>
             </div>
@@ -234,7 +234,7 @@ export default function AntiGravityIDE() {
                         onKeyDown={(e) => {
                             if (e.key === "Enter") handleSend();
                         }}
-                        placeholder="Instruct agents via Gravity Core..."
+                        placeholder="Instruct agents via Nova Core..."
                         className="flex-1 bg-transparent border-none text-zinc-100 placeholder-zinc-600 focus:ring-0 text-sm font-mono outline-none"
                     />
                 </div>
