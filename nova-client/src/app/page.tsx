@@ -1,251 +1,375 @@
 "use client";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { ActivityBar } from "./components/ActivityBar";
+import { Sidebar } from "./components/Sidebar";
+import { TabBar } from "./components/TabBar";
+import { EditorArea } from "./components/EditorArea";
+import { BottomPanel } from "./components/BottomPanel";
+import { StatusBar } from "./components/StatusBar";
+import { CommandPalette } from "./components/CommandPalette";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { MenuBar } from "./components/MenuBar";
+import { useFileSystem } from "./hooks/useFileSystem";
+import { useWebSocket } from "./hooks/useWebSocket";
+import { useSettings } from "./hooks/useSettings";
+import { useTaskQueue } from "./hooks/useTaskQueue";
+import type { FileNode, Agent, SidebarView, PanelTab, Language, AgentTask } from "./components/types";
+import type { EditorProblem } from "./components/EditorArea";
 
-import React, { useState, useEffect, useRef } from "react";
-import { Send, Terminal, Folder, FileCode2, Settings, Zap, Shield, Play } from "lucide-react";
-import { motion, useAnimation } from "framer-motion";
-import Editor from "@monaco-editor/react";
-
-// Agent Definitions
-const AGENTS = {
-  Coder: { color: "bg-blue-500", shadow: "shadow-[0_0_20px_rgba(59,130,246,0.6)]", label: "Writer" },
-  Researcher: { color: "bg-yellow-500", shadow: "shadow-[0_0_20px_rgba(234,179,8,0.6)]", label: "Reviewer" },
-  Executor: { color: "bg-zinc-400", shadow: "shadow-[0_0_20px_rgba(161,161,170,0.6)]", label: "DevOps" },
-  Supervisor: { color: "bg-white", shadow: "shadow-[0_0_20px_rgba(255,255,255,0.8)]", label: "Nova Core" },
-  Security: { color: "bg-orange-500", shadow: "shadow-[0_0_20px_rgba(249,115,22,0.6)]", label: "Security" },
-  Performance: { color: "bg-cyan-500", shadow: "shadow-[0_0_20px_rgba(6,182,212,0.6)]", label: "Performance" }
-};
+const DEFAULT_AGENTS: Agent[] = [
+  { id:'Supervisor', label:'Nova Core',  description:'Central orchestrator — routes all tasks', color:'#ffffff', bgColor:'bg-white',      dotColor:'bg-white',      isActive:false, status:'idle' },
+  { id:'Coder',      label:'Writer',     description:'Writes, refactors and reviews code',     color:'#3b82f6', bgColor:'bg-blue-500',   dotColor:'bg-blue-400',   isActive:false, status:'idle' },
+  { id:'Researcher', label:'Reviewer',   description:'Searches docs and synthesizes knowledge', color:'#eab308', bgColor:'bg-yellow-500', dotColor:'bg-yellow-400', isActive:false, status:'idle' },
+  { id:'Executor',   label:'DevOps',     description:'Runs commands and manages CI/CD',        color:'#a1a1aa', bgColor:'bg-zinc-400',   dotColor:'bg-zinc-400',   isActive:false, status:'idle' },
+  { id:'Security',   label:'Security',   description:'Audits code for vulnerabilities',        color:'#f97316', bgColor:'bg-orange-500', dotColor:'bg-orange-400', isActive:false, status:'idle' },
+  { id:'Performance',label:'Perf',       description:'Profiles, optimizes and benchmarks',     color:'#06b6d4', bgColor:'bg-cyan-500',   dotColor:'bg-cyan-400',   isActive:false, status:'idle' },
+];
 
 export default function NovaIDE() {
-  const [messages, setMessages] = useState<any[]>([]);
-  const [input, setInput] = useState("");
-  const [ws, setWs] = useState<WebSocket | null>(null);
-  const [activeAgent, setActiveAgent] = useState<string | null>(null);
-  
-  // Editor state
-  const [code, setCode] = useState('// Welcome to the Nova IDE\\n// Agents are standing by.\\n\\nfunction init() {\\n  console.log("Nova Core online.");\\n}\\n');
+  const fs = useFileSystem();
+  const ws = useWebSocket();
+  const { settings, update: updateSettings, reset: resetSettings } = useSettings();
+  const tq = useTaskQueue(fs.activeTab, ws.status, ws.sendMessage);
+  const [pendingDiff, setPendingDiff] = useState<AgentTask['diff'] | null>(null);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [sidebarView, setSidebarView] = useState<SidebarView | null>('explorer');
+  const [panelTab, setPanelTab] = useState<PanelTab>('terminal');
+  const [cmdOpen, setCmdOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [problems, setProblems] = useState<EditorProblem[]>([]);
+  const [agents, setAgents] = useState<Agent[]>(DEFAULT_AGENTS);
+  // Cursor position tracked from EditorArea
+  const [cursor, setCursor] = useState({ line: 1, col: 1, lines: 0 });
 
+  const outputLines = [
+    '> Nova Core v1.0.0 initializing…',
+    '✓ Supervisor agent ready',
+    '→ Coder, Researcher, Executor, Security, Performance agents loaded',
+    '✓ Virtual file system mounted (localStorage)',
+    `⚙ Connecting to ws://127.0.0.1:8000/ws/chat — status: ${ws.status}`,
+  ];
+
+  // Sync active agent
   useEffect(() => {
-    const websocket = new WebSocket("ws://127.0.0.1:8000/ws/chat");
-    setWs(websocket);
+    if (ws.activeAgent) {
+      setAgents(prev => prev.map(a => a.id === ws.activeAgent
+        ? { ...a, isActive: true, status: 'working', task: ws.messages.at(-1)?.content?.slice(0, 60) }
+        : a));
+    } else {
+      setAgents(prev => prev.map(a => a.isActive ? { ...a, isActive: false, status: 'idle', task: undefined } : a));
+    }
+  }, [ws.activeAgent]);
 
-    websocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setMessages((prev) => [...prev, data]);
-      
-      if (data.agentId) {
-        setActiveAgent(data.agentId);
-        // Reset active agent after 2 seconds if no new messages
-        setTimeout(() => setActiveAgent(null), 2000);
+  // ── Central command dispatcher ────────────────────────────────────────
+  const handleCommand = useCallback((id: string) => {
+    setCmdOpen(false);
+    switch (id) {
+      // ── File ──
+      case 'new-file': handleCreateFile(); break;
+      case 'open-folder': {
+        ws.sendMessage('[info] Folder open requires a backend with filesystem access. Use the Explorer + icons to create files.');
+        setPanelTab('terminal');
+        break;
       }
-    };
+      case 'save': { const t = fs.activeTab; if (t) fs.saveFile(t.id, t.content); break; }
+      case 'save-all': fs.tabs.forEach(t => fs.saveFile(t.id, t.content)); break;
+      case 'close-tab': { if (fs.activeTabId) fs.closeTab(fs.activeTabId); break; }
+      case 'close-all': [...fs.tabs].forEach(t => fs.closeTab(t.id)); break;
 
-    return () => websocket.close();
+      // ── Edit ──
+      case 'undo': (window as any).__novaEditorAction?.('undo'); break;
+      case 'redo': (window as any).__novaEditorAction?.('redo'); break;
+      case 'find': (window as any).__novaEditorAction?.('find'); break;
+      case 'replace': (window as any).__novaEditorAction?.('replace'); break;
+      case 'format': (window as any).__novaEditorAction?.('format'); break;
+      case 'go-to-line': (window as any).__novaEditorAction?.('go-to-line'); break;
+
+      // ── Go ──
+      case 'go-symbol': (window as any).__novaEditorAction?.('go-symbol'); break;
+      case 'go-def': (window as any).__novaEditorAction?.('go-def'); break;
+      case 'go-refs': (window as any).__novaEditorAction?.('go-refs'); break;
+
+      // ── View / panels ──
+      case 'explorer': setSidebarView(v => v === 'explorer' ? null : 'explorer'); break;
+      case 'search': case 'search-panel': setSidebarView('search'); break;
+      case 'git': setSidebarView('git'); break;
+      case 'agents': setSidebarView('agents'); break;
+      case 'extensions': setSidebarView('extensions'); break;
+      case 'sidebar': setSidebarView(v => v ? null : 'explorer'); break;
+      case 'terminal': setPanelTab('terminal'); break;
+      case 'problems': setPanelTab('problems'); break;
+      case 'output': setPanelTab('output'); break;
+      case 'debug': setPanelTab('debug'); break;
+      case 'clear-terminal': ws.clearMessages(); break;
+      case 'settings': setSettingsOpen(true); break;
+      case 'cmd-palette': setCmdOpen(true); break;
+      case 'quick-open': setCmdOpen(true); break;
+
+      // ── Theme shortcuts ──
+      case 'theme-dark': updateSettings({ theme: 'vs-dark' }); break;
+      case 'theme-light': updateSettings({ theme: 'vs' }); break;
+      case 'theme-hc': updateSettings({ theme: 'hc-black' }); break;
+
+      // ── Run ──
+      case 'run-file': handleRunFile(); break;
+      case 'run-tests': {
+        setPanelTab('terminal');
+        ws.sendMessage('[tests] Running test suite — connect nova-core backend to execute real tests.');
+        break;
+      }
+      case 'debug-file': {
+        setPanelTab('debug');
+        ws.sendMessage('[debug] Debug session started. Connect nova-core backend for live breakpoints.');
+        break;
+      }
+
+      // ── Nova AI ──
+      case 'nova-task': setPanelTab('terminal'); break;
+      case 'nova-explain': {
+        const code = (window as any).__novaGetSelection?.() || 'the current file';
+        ws.sendMessage(`Nova: Explain this code in detail:\n${code}`);
+        setPanelTab('terminal');
+        break;
+      }
+      case 'nova-refactor': {
+        const code = (window as any).__novaGetSelection?.() || 'the current file';
+        ws.sendMessage(`Nova: Refactor this code for clarity and performance:\n${code}`);
+        setPanelTab('terminal');
+        break;
+      }
+      case 'nova-test': {
+        const tab = fs.activeTab;
+        ws.sendMessage(`Nova: Generate comprehensive unit tests for: ${tab?.name ?? 'the current file'}`);
+        setPanelTab('terminal');
+        break;
+      }
+      case 'nova-fix': {
+        ws.sendMessage(`Nova: Fix all ${problems.length} diagnostic(s) in ${fs.activeTab?.name ?? 'the current file'}`);
+        setPanelTab('terminal');
+        break;
+      }
+    }
+  }, [fs, ws, updateSettings, problems]);
+
+  // ── Run current file ──────────────────────────────────────────────────
+  const handleRunFile = useCallback(async () => {
+    const tab = fs.activeTab;
+    if (!tab) { ws.sendMessage('[run] No file open.'); setPanelTab('terminal'); return; }
+    setPanelTab('terminal');
+    ws.sendMessage(`[run] ${tab.name}`);
+    try {
+      const res = await fetch('http://127.0.0.1:8000/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: tab.name, content: tab.content, language: tab.language }),
+      });
+      const data = await res.json();
+      ws.sendMessage(`[output] ${data.output ?? data.error ?? 'done'}`);
+    } catch {
+      ws.sendMessage('[run] nova-core offline — start the backend to execute code remotely.');
+    }
+  }, [fs.activeTab, ws]);
+
+  // Expose run + editor actions globally
+  useEffect(() => { (window as any).__novaRunFile = handleRunFile; }, [handleRunFile]);
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (ctrl && e.shiftKey && e.key === 'P') { e.preventDefault(); setCmdOpen(true); }
+      if (ctrl && !e.shiftKey && e.key === 'p') { e.preventDefault(); setCmdOpen(true); }
+      if (e.key === 'Escape') { setCmdOpen(false); setSettingsOpen(false); }
+      if (ctrl && e.key === 'b') { e.preventDefault(); setSidebarView(v => v ? null : 'explorer'); }
+      if (ctrl && e.key === '`') { e.preventDefault(); setPanelTab('terminal'); }
+      if (ctrl && e.shiftKey && e.key === 'G') { e.preventDefault(); setSidebarView('git'); }
+      if (ctrl && e.shiftKey && e.key === 'F') { e.preventDefault(); setSidebarView('search'); }
+      if (ctrl && e.shiftKey && e.key === 'E') { e.preventDefault(); setSidebarView('explorer'); }
+      if (ctrl && e.key === ',') { e.preventDefault(); setSettingsOpen(true); }
+      if (ctrl && e.key === 'n') { e.preventDefault(); handleCreateFile(); }
+      if (ctrl && e.key === 'w') { e.preventDefault(); if (fs.activeTabId) fs.closeTab(fs.activeTabId); }
+      if (e.key === 'F5') { e.preventDefault(); handleRunFile(); }
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [fs.activeTabId, fs.closeTab, handleRunFile]);
+
+  // ── File operations ───────────────────────────────────────────────────
+  const handleOpenFile = useCallback((node: FileNode) => {
+    if (node.type === 'folder') return;
+    // node.id is like "f-src/main.ts", path is "src/main.ts"
+    const path = node.id.startsWith('f-') ? node.id.slice(2) : node.id;
+    fs.openFile(path);
+  }, [fs]);
+
+  const handleCreateFile = useCallback(() => {
+    const name = window.prompt('New file path (e.g. src/utils.ts):');
+    if (!name?.trim()) return;
+    const n = name.trim();
+    const lang: Language = n.endsWith('.py') ? 'python' : n.endsWith('.json') ? 'json'
+      : n.endsWith('.md') ? 'markdown' : n.endsWith('.html') ? 'html'
+      : n.endsWith('.css') ? 'css' : n.endsWith('.go') ? 'go'
+      : n.endsWith('.rs') ? 'rust' : n.endsWith('.yaml') || n.endsWith('.yml') ? 'yaml'
+      : 'typescript';
+    fs.createFile(n, lang);
+  }, [fs]);
+
+  const handleCreateFolder = useCallback(() => {
+    const name = window.prompt('New folder path (e.g. src/utils):');
+    if (!name?.trim()) return;
+    // Create a placeholder .gitkeep inside the folder
+    fs.createFile(`${name.trim()}/.gitkeep`, 'markdown');
+  }, [fs]);
+
+  const handleDeleteFile = useCallback((node: FileNode) => {
+    if (!window.confirm(`Delete "${node.name}"?`)) return;
+    const path = node.id.startsWith('f-') ? node.id.slice(2) : node.id;
+    fs.deleteFile(path);
+  }, [fs]);
+
+  const handleRenameFile = useCallback((node: FileNode) => {
+    const oldPath = node.id.startsWith('f-') ? node.id.slice(2) : node.id;
+    const newPath = window.prompt('Rename to:', oldPath);
+    if (!newPath || newPath === oldPath) return;
+    fs.renameFile(oldPath, newPath.trim());
+  }, [fs]);
+
+  // ── Search ────────────────────────────────────────────────────────────
+  const handleOpenSearchResult = useCallback((path: string, line: number) => {
+    fs.openFile(path);
+    setTimeout(() => { (window as any).__novaJumpTo?.(line); }, 200);
+  }, [fs]);
+
+  // ── Git ───────────────────────────────────────────────────────────────
+  const handleGitAction = useCallback(async (cmd: string, arg?: string) => {
+    setPanelTab('terminal');
+    ws.sendMessage(`[git] ${cmd}${arg ? ': ' + arg : ''}`);
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/git/${cmd}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: arg }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      ws.sendMessage(`[git] ✓ ${cmd}: ${data.output ?? 'ok'}`);
+    } catch {
+      ws.sendMessage(`[git] ${cmd} — backend not reachable. Run nova-core to enable git ops.`);
+    }
+  }, [ws]);
+
+  // ── Problems jump ─────────────────────────────────────────────────────
+  const handleJumpToProblem = useCallback((p: EditorProblem) => {
+    (window as any).__novaJumpTo?.(p.line);
   }, []);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleSend = () => {
-    if (!input.trim() || !ws) return;
-    
-    const userMsg = { type: "message", content: input, role: "user" };
-    setMessages((prev) => [...prev, userMsg]);
-    
-    ws.send(JSON.stringify({ type: "message", content: input }));
-    setInput("");
-  };
-
-  const handleApproval = (msgIdx: number, approved: boolean) => {
-    if (!ws) return;
-    const response = approved ? "User approved the action." : "User rejected the action.";
-    setMessages((prev) => {
-        const newMsg = [...prev];
-        newMsg[msgIdx] = { ...newMsg[msgIdx], status: approved ? "approved" : "rejected" };
-        newMsg.push({ type: "message", content: response, role: "user" });
-        return newMsg;
-    });
-    ws.send(JSON.stringify({ type: "approval", content: response }));
-  };
-
-  // Agent Bubble Component
-  const AgentBubble = ({ id, x, y }: { id: string, x: number, y: number }) => {
-    const isActive = activeAgent === id;
-    const config = AGENTS[id as keyof typeof AGENTS];
-    if (!config) return null;
-
-    return (
-      <motion.div
-        drag
-        dragMomentum={true}
-        animate={{ 
-          x: isActive ? x + (Math.random() * 20 - 10) : x, 
-          y: isActive ? y + (Math.random() * 20 - 10) : y,
-          scale: isActive ? 1.2 : 1
-        }}
-        transition={{ type: "spring", stiffness: 50, damping: 10 }}
-        className="absolute z-50 flex flex-col items-center cursor-grab active:cursor-grabbing"
-      >
-        <div className={`w-12 h-12 rounded-full ${config.color} ${isActive ? config.shadow : ''} border-2 border-[#121214] flex items-center justify-center transition-all duration-300`}>
-           <Zap className={`w-5 h-5 ${id === 'Supervisor' ? 'text-black' : 'text-white'}`} />
-        </div>
-        <span className={`mt-2 text-[10px] font-bold tracking-wider uppercase ${isActive ? 'text-zinc-100' : 'text-zinc-500'} transition-colors`}>{config.label}</span>
-      </motion.div>
-    );
-  };
+  const activeTab = fs.activeTab;
 
   return (
-    <div className="flex h-screen bg-[#09090b] text-zinc-100 overflow-hidden font-sans">
-      
-      {/* Sidebar - Project Workspace */}
-      <div className="w-64 bg-[#121214] border-r border-zinc-800 flex flex-col z-20">
-        <div className="p-4 border-b border-zinc-800 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className="w-6 h-6 rounded bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center">
-                <Zap className="w-3 h-3 text-white" fill="currentColor" />
-            </div>
-            <h1 className="font-bold text-sm tracking-wide text-zinc-100">NOVA</h1>
-          </div>
-        </div>
+    <div className="flex flex-col h-screen bg-[#0e0e10] text-zinc-100 overflow-hidden" style={{ fontFamily: "'Inter',sans-serif" }}>
 
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">Workspace</h2>
-          </div>
-          <div className="space-y-1">
-            <div className="flex items-center space-x-2 px-2 py-1.5 hover:bg-zinc-800 rounded-md cursor-pointer text-sm text-zinc-300">
-              <Folder className="w-4 h-4 text-zinc-500" />
-              <span>src</span>
-            </div>
-            <div className="flex items-center space-x-2 px-2 py-1.5 bg-blue-500/10 rounded-md cursor-pointer text-sm text-blue-400 ml-4">
-              <FileCode2 className="w-4 h-4 text-blue-400" />
-              <span>nova_core.js</span>
-            </div>
-          </div>
-        </div>
+      {/* ── Real menu bar ──────────────────────────────────────────────── */}
+      <MenuBar wsStatus={ws.status} onCommand={handleCommand} onCmdPalette={() => setCmdOpen(true)} />
 
-        <div className="p-4 border-t border-zinc-800">
-             <div className="text-[10px] text-zinc-500 uppercase tracking-wider mb-2">Nova Core Status</div>
-             <div className="flex items-center space-x-2">
-                 <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                 <span className="text-xs text-zinc-300">Synchronized</span>
-             </div>
+      {/* ── Workspace ─────────────────────────────────────────────────── */}
+      <div className="flex flex-1 overflow-hidden">
+        <ActivityBar
+          activeView={sidebarView}
+          onViewChange={v => setSidebarView(prev => prev === v ? null : v)}
+          onSettings={() => setSettingsOpen(true)}
+          onRunFile={handleRunFile}
+          onRunTests={() => handleCommand('run-tests')}
+          onDebug={() => handleCommand('debug-file')}
+        />
+        <Sidebar
+          activeView={sidebarView}
+          fileTree={fs.fileTree}
+          selectedPath={activeTab ? `f-${activeTab.id.replace('tab-', '')}` : null}
+          onOpenFile={handleOpenFile}
+          onCreateFile={handleCreateFile}
+          onCreateFolder={handleCreateFolder}
+          onDeleteFile={handleDeleteFile}
+          onRenameFile={handleRenameFile}
+          onSearch={fs.searchFiles}
+          onOpenSearchResult={handleOpenSearchResult}
+          onGitAction={handleGitAction}
+          agents={agents}
+          activeAgent={ws.activeAgent}
+          tasks={tq.tasks}
+          onAddTask={tq.addTask}
+          onRemoveTask={tq.removeTask}
+          onReviewDiff={diff => { setPendingDiff(diff ?? null); }}
+          onClearCompleted={tq.clearCompleted}
+        />
+
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar
+            tabs={fs.tabs}
+            activeTabId={fs.activeTabId}
+            onTabSelect={fs.setActiveTabId}
+            onTabClose={fs.closeTab}
+            onTabPin={fs.pinTab}
+          />
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <EditorArea
+              tab={activeTab}
+              onCodeChange={fs.markModified}
+              onSave={fs.saveFile}
+              onOpenSearch={() => setSidebarView('search')}
+              onProblemsUpdate={setProblems}
+              onCursorChange={setCursor}
+              settings={settings}
+              pendingDiff={pendingDiff}
+              onAcceptDiff={newContent => {
+                if (activeTab) { fs.saveFile(activeTab.id, newContent); }
+                setPendingDiff(null);
+              }}
+              onRejectDiff={() => setPendingDiff(null)}
+            />
+            <BottomPanel
+              activeTab={panelTab}
+              onTabChange={setPanelTab}
+              messages={ws.messages}
+              onSend={ws.sendMessage}
+              wsStatus={ws.status}
+              onApprove={ws.approve}
+              onClear={ws.clearMessages}
+              problems={problems}
+              onJumpToProblem={handleJumpToProblem}
+              outputLines={outputLines}
+            />
+          </div>
         </div>
       </div>
 
-      {/* Main Area: Split Editor and Terminal */}
-      <div className="flex-1 flex flex-col relative bg-[#09090b]">
-        
-        {/* Floating Agent Bubbles Layer */}
-        <div className="absolute inset-0 pointer-events-none z-40 overflow-hidden">
-            <div className="pointer-events-auto">
-                <AgentBubble id="Supervisor" x={600} y={50} />
-                <AgentBubble id="Coder" x={150} y={150} />
-                <AgentBubble id="Researcher" x={750} y={200} />
-                <AgentBubble id="Executor" x={100} y={400} />
-                <AgentBubble id="Security" x={300} y={50} />
-                <AgentBubble id="Performance" x={850} y={400} />
-            </div>
-        </div>
+      {/* ── Status bar ─────────────────────────────────────────────────── */}
+      <StatusBar
+        wsStatus={ws.status}
+        activeTabName={activeTab?.name}
+        language={activeTab?.language}
+        cursorLine={cursor.line}
+        cursorCol={cursor.col}
+        lineCount={cursor.lines}
+        activeAgent={ws.activeAgent}
+        errorCount={problems.filter(p => p.severity === 'error').length}
+        warnCount={problems.filter(p => p.severity === 'warning').length}
+        branch="main"
+      />
 
-        {/* Top Header */}
-        <header className="h-10 border-b border-zinc-800 flex items-center px-4 bg-[#121214] z-10">
-            <div className="flex space-x-4">
-                <span className="text-xs text-zinc-400 hover:text-zinc-100 cursor-pointer transition-colors">nova_core.js</span>
-            </div>
-        </header>
-
-        {/* Monaco Editor */}
-        <div className="flex-1 relative z-0">
-             <Editor
-                height="100%"
-                defaultLanguage="javascript"
-                theme="vs-dark"
-                value={code}
-                onChange={(value) => setCode(value || '')}
-                options={{
-                    minimap: { enabled: true },
-                    fontSize: 14,
-                    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                    padding: { top: 24 },
-                    scrollBeyondLastLine: false,
-                    smoothScrolling: true,
-                    cursorBlinking: "smooth",
-                }}
-             />
-        </div>
-
-        {/* Bottom Panel: Chat and Terminal Feed */}
-        <div className="h-72 border-t border-zinc-800 bg-[#121214] flex flex-col z-30 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
-            <div className="h-8 border-b border-zinc-800 flex items-center px-4 space-x-6 text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">
-                <span className="text-blue-400 border-b border-blue-400 h-full flex items-center">Nova Terminal</span>
-                <span className="hover:text-zinc-300 cursor-pointer transition-colors">Agent Logs</span>
-                <span className="hover:text-zinc-300 cursor-pointer transition-colors">Problems</span>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 font-mono text-sm">
-                {messages.length === 0 ? (
-                    <div className="text-zinc-600 italic">No active processes. Awaiting user input...</div>
-                ) : (
-                    messages.map((msg, idx) => (
-                        <div key={idx} className={`flex space-x-3 ${msg.role === 'user' ? 'text-zinc-300' : ''}`}>
-                            <div className="flex-shrink-0 mt-0.5">
-                                {msg.role === 'user' ? (
-                                    <span className="text-purple-400">❯</span>
-                                ) : (
-                                    <span className={
-                                        msg.agentId === 'Coder' ? 'text-blue-400' :
-                                        msg.agentId === 'Researcher' ? 'text-yellow-400' :
-                                        msg.agentId === 'Executor' ? 'text-zinc-400' :
-                                        'text-white'
-                                    }>✦</span>
-                                )}
-                            </div>
-                            <div className="flex-1">
-                                {msg.agentId && <span className="text-zinc-500 text-[10px] uppercase mr-2 font-sans tracking-widest">{AGENTS[msg.agentId as keyof typeof AGENTS]?.label || msg.agentId}</span>}
-                                <span className={
-                                    msg.type === 'error' ? 'text-red-400' :
-                                    msg.type === 'tool_execution' ? 'text-green-400' :
-                                    msg.type === 'diff' ? 'text-cyan-400' :
-                                    msg.role === 'user' ? 'text-zinc-100' : 'text-zinc-400'
-                                }>
-                                    {msg.content}
-                                </span>
-
-                                {msg.type === "approval_request" && !msg.status && (
-                                    <div className="flex space-x-3 mt-2">
-                                        <button onClick={() => handleApproval(idx, true)} className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs rounded shadow-md transition-colors font-sans">Approve</button>
-                                        <button onClick={() => handleApproval(idx, false)} className="px-3 py-1 bg-zinc-700 hover:bg-red-500 text-white text-xs rounded shadow-md transition-colors font-sans">Reject</button>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    ))
-                )}
-                <div ref={messagesEndRef} />
-            </div>
-
-            {/* Input Bar */}
-            <div className="p-2 border-t border-zinc-800 bg-[#09090b]">
-                <div className="flex items-center space-x-2 bg-zinc-900 border border-zinc-800 rounded px-3 py-1.5 focus-within:border-zinc-600 transition-colors">
-                    <span className="text-purple-400 font-mono text-sm">❯</span>
-                    <input 
-                        type="text"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === "Enter") handleSend();
-                        }}
-                        placeholder="Instruct agents via Nova Core..."
-                        className="flex-1 bg-transparent border-none text-zinc-100 placeholder-zinc-600 focus:ring-0 text-sm font-mono outline-none"
-                    />
-                </div>
-            </div>
-        </div>
-
-      </div>
+      {/* ── Overlays ───────────────────────────────────────────────────── */}
+      <CommandPalette
+        isOpen={cmdOpen}
+        onClose={() => setCmdOpen(false)}
+        onCommand={handleCommand}
+        filePaths={fs.filePaths}
+        onOpenFile={path => fs.openFile(path)}
+      />
+      <SettingsPanel
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        onUpdate={updateSettings}
+        onReset={resetSettings}
+      />
     </div>
   );
 }
